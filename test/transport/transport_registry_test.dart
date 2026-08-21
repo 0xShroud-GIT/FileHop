@@ -310,6 +310,38 @@ void main() {
     );
   });
 
+  test('state transitions preserve fresh discovery generation', () {
+    final TransportCandidateRegistry candidates = TransportCandidateRegistry();
+    const TransportCandidateKey key = TransportCandidateKey(
+      kind: TransportKind.lan,
+      candidateId: 'l1',
+    );
+    candidates.recordFound(kind: TransportKind.lan, candidateId: 'l1');
+    candidates.recordLost(kind: TransportKind.lan, candidateId: 'l1');
+    candidates.recordFound(kind: TransportKind.lan, candidateId: 'l1');
+    expect(candidates[key]!.generation, 2);
+
+    expect(
+      candidates.tryApply(
+        key,
+        TransportCandidateEvent.startConnect,
+        authority: TransitionAuthority.localCommand,
+      ),
+      isTrue,
+    );
+    expect(candidates[key]!.generation, 2);
+
+    expect(
+      candidates.tryApply(
+        key,
+        TransportCandidateEvent.fail,
+        authority: TransitionAuthority.transportEvent,
+      ),
+      isTrue,
+    );
+    expect(candidates[key]!.generation, 2);
+  });
+
   test('Mission 03 state machine remains authoritative', () {
     final TransportCandidateRegistry candidates = TransportCandidateRegistry();
     candidates.recordFound(kind: TransportKind.lan, candidateId: 'l1');
