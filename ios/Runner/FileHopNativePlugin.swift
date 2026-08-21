@@ -265,6 +265,15 @@ final class FileHopNativePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     return nil
   }
 
+  /// Discovery callbacks arrive on FileHopLanDiscovery's private queue.
+  /// Flutter event sinks are main-thread objects, and cancellation may race a
+  /// queued emission, so resolve the current sink only after hopping to main.
+  private func emitEvent(_ payload: [String: Any]) {
+    DispatchQueue.main.async { [weak self] in
+      self?.eventSink?(payload)
+    }
+  }
+
   func detachFromEngine(for registrar: FlutterPluginRegistrar) {
     lanDiscovery.detach()
     eventSink = nil
