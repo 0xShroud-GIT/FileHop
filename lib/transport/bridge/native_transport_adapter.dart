@@ -195,7 +195,8 @@ class NativeTransportAdapter implements TransportAdapter {
         );
       case NativeEventKind.connectionChanged:
         final NativeConnectionHandle? connection = event.connection;
-        if (connection == null) {
+        final bool? connected = event.connected;
+        if (connection == null || connected == null) {
           return null;
         }
         return AdapterConnectionChanged(
@@ -204,7 +205,7 @@ class NativeTransportAdapter implements TransportAdapter {
             handleId: connection.handleId,
             kind: mapped,
           ),
-          connected: true,
+          connected: connected,
         );
       case NativeEventKind.endpointChanged:
         final NativeEndpoint? endpoint = event.endpoint;
