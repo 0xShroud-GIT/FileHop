@@ -83,7 +83,8 @@ void main() {
 
     final TransportAdapterEvent event = await adapter.events.first;
     expect(event, isA<AdapterConnectionChanged>());
-    expect((event as AdapterConnectionChanged).connected, isFalse);
-    expect(event.connection.handleId, 'connection-2');
+    final AdapterConnectionChanged changed = event as AdapterConnectionChanged;
+    expect(changed.connected, isFalse);
+    expect(changed.connection.handleId, 'connection-2');
   });
 }
