@@ -1,0 +1,43 @@
+# Dart / Flutter
+.dart_tool/
+.packages
+.pub/
+.pub-cache/
+build/
+coverage/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Editors / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+*.swp
+*.tmp
+*.log
+
+# Android local/generated state
+android/.gradle/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+
+# iOS local/generated state
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/ephemeral/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+DerivedData/
+
+# Local databases / exports
+*.db
+*.sqlite
+*.sqlite3
+*.zip
+*.zip.sha256
+
+# Generated contract-test artifacts
+artifacts/

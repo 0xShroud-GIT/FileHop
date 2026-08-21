@@ -1,0 +1,16 @@
+export 'constants.dart';
+export 'errors.dart';
+export 'fake/fake_protected_identity_key_store.dart';
+export 'fingerprint_deriver.dart';
+export 'generated_identity_material.dart';
+export 'identity_key_material_provider.dart';
+export 'local_identity.dart';
+export 'local_identity_load.dart';
+export 'local_identity_metadata_store.dart';
+export 'local_identity_service.dart';
+export 'native/native_protected_identity_key_store.dart';
+export 'protected_identity_key_store.dart';
+export 'protected_key_reference.dart';
+export 'protected_key_status.dart';
+export 'reference_allocation.dart';
+export 'trust_service.dart';
