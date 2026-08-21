@@ -3,6 +3,12 @@ import 'transport_adapter_event.dart';
 import 'transport_adapter_types.dart';
 
 /// One FileHop transport family. Shared contract; no OS objects leak out.
+///
+/// Registering an adapter with [TransportManager] does not transfer the
+/// adapter/backend object's lifetime ownership. The composition root that
+/// creates a concrete adapter remains responsible for stopping/closing that
+/// adapter's discovery/native resources. TransportManager owns only its event
+/// subscriptions and any selected connection handle it acquires.
 abstract class TransportAdapter {
   TransportKind get kind;
 
