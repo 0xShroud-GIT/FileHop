@@ -26,6 +26,12 @@ class TransportCapabilityRegistry {
   Stream<TransportCapabilitySnapshot> get changes => _changes.stream;
 
   Future<void> register(TransportAdapter adapter) async {
+    if (_closed) {
+      throw const TransportException(
+        kind: TransportFailureKind.invalidArgument,
+        message: 'transport capability registry is closed',
+      );
+    }
     if (_adapters.containsKey(adapter.kind)) {
       throw TransportException(
         kind: TransportFailureKind.invalidArgument,
@@ -34,6 +40,12 @@ class TransportCapabilityRegistry {
     }
     final TransportCapabilitySnapshot snapshot = await adapter
         .observeAvailability();
+    if (_closed) {
+      throw const TransportException(
+        kind: TransportFailureKind.invalidArgument,
+        message: 'transport capability registry closed during registration',
+      );
+    }
     if (snapshot.kind != adapter.kind) {
       throw TransportException(
         kind: TransportFailureKind.adapterContractViolation,
@@ -74,6 +86,9 @@ class TransportCapabilityRegistry {
 
   /// Apply a capability-relevant event. Mismatched kinds are contract failures.
   void ingest(TransportKind registeredKind, TransportAdapterEvent event) {
+    if (_closed) {
+      return;
+    }
     if (event.kind != registeredKind) {
       lastContractError = TransportException(
         kind: TransportFailureKind.adapterContractViolation,
@@ -99,7 +114,11 @@ class TransportCapabilityRegistry {
         if (current == null) {
           return;
         }
-        _snapshots[registeredKind] = current.withPermission(permission);
+        final TransportCapabilitySnapshot updated = current.withPermission(
+          permission,
+        );
+        _snapshots[registeredKind] = updated;
+        _changes.add(updated);
       case AdapterErrorEvent():
       case AdapterLifecycleChanged():
       case AdapterCandidateFound():

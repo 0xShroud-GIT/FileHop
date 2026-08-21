@@ -19,13 +19,20 @@ class NativeBridge {
   final EventChannel _events;
   final NativeCodec _codec;
 
-  Stream<NativeAdapterEvent> events() {
-    return _events
-        .receiveBroadcastStream()
-        .map(_codec.decodeEvent)
-        .where((NativeAdapterEvent? event) => event != null)
-        .cast<NativeAdapterEvent>();
-  }
+  /// One EventChannel stream per bridge instance.
+  ///
+  /// [EventChannel.receiveBroadcastStream] creates a new native listen/cancel
+  /// lifecycle each time it is invoked. TransportManager and
+  /// TransportCapabilityRegistry both subscribe to adapter events, so the
+  /// native stream must be created once and shared rather than reopening the
+  /// platform channel for every getter access.
+  late final Stream<NativeAdapterEvent> _eventStream = _events
+      .receiveBroadcastStream()
+      .map(_codec.decodeEvent)
+      .where((NativeAdapterEvent? event) => event != null)
+      .cast<NativeAdapterEvent>();
+
+  Stream<NativeAdapterEvent> events() => _eventStream;
 
   Future<NativePingResult> ping() async {
     return _invoke('ping', <String, Object?>{}, _codec.decodePing);

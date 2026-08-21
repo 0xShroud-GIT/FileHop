@@ -198,6 +198,7 @@ class TransportCandidateRegistry {
       _items[key] = RegisteredTransportCandidate(
         candidate: current.candidate.apply(event, authority: authority),
         displayLabel: current.displayLabel,
+        generation: current.generation,
       );
       return true;
     } on InvalidStateTransition {
