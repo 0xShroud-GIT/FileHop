@@ -396,49 +396,59 @@ class TransportManager {
   }
 
   Future<void> close() {
-    return _closeFuture ??= _closeBody();
+    if (_closed) {
+      return Future<void>.value();
+    }
+    final Future<void>? pending = _closeFuture;
+    if (pending != null) {
+      return pending;
+    }
+    final Future<void> next = _closeBody();
+    _closeFuture = next;
+    return next;
   }
 
   Future<void> _closeBody() async {
     _closing = true;
     try {
       await _serialized<void>(() async {
-        TransportException? cleanupError;
         final SelectedTransportPath? current = _current;
         if (current != null) {
           final TransportAdapter? adapter = capabilities.adapterFor(
             current.kind,
           );
           if (adapter == null) {
-            cleanupError = const TransportException(
+            throw const TransportException(
               kind: TransportFailureKind.cleanupFailed,
               message: 'active transport has no registered adapter at close',
             );
-          } else {
-            try {
-              await adapter.disconnect(current.connection);
-            } on TransportException catch (error) {
-              cleanupError = TransportException(
-                kind: TransportFailureKind.cleanupFailed,
-                message: 'failed to disconnect active transport at close',
-                causeKind: error.kind,
-              );
-            } catch (_) {
-              cleanupError = const TransportException(
-                kind: TransportFailureKind.cleanupFailed,
-                message: 'failed to disconnect active transport at close',
-              );
-            }
           }
+          try {
+            await adapter.disconnect(current.connection);
+          } on TransportException catch (error) {
+            throw TransportException(
+              kind: TransportFailureKind.cleanupFailed,
+              message: 'failed to disconnect active transport at close',
+              causeKind: error.kind,
+            );
+          } catch (_) {
+            throw const TransportException(
+              kind: TransportFailureKind.cleanupFailed,
+              message: 'failed to disconnect active transport at close',
+            );
+          }
+          // Clear ownership only after the adapter confirms release. A failed
+          // close keeps the handle reachable for a later close retry.
           _current = null;
         }
 
+        TransportException? teardownError;
         for (final StreamSubscription<TransportAdapterEvent> sub
             in _subscriptions) {
           try {
             await sub.cancel();
           } catch (_) {
-            cleanupError ??= const TransportException(
+            teardownError ??= const TransportException(
               kind: TransportFailureKind.cleanupFailed,
               message: 'failed to cancel transport event subscription',
             );
@@ -448,18 +458,29 @@ class TransportManager {
         try {
           await capabilities.close();
         } catch (_) {
-          cleanupError ??= const TransportException(
+          teardownError ??= const TransportException(
             kind: TransportFailureKind.cleanupFailed,
             message: 'failed to close transport capability registry',
           );
         }
-        if (cleanupError != null) {
-          throw cleanupError;
+
+        // Event/capability teardown is one-way. Once the live connection has
+        // been released, this manager is closed even if a teardown operation
+        // reports an error to the caller.
+        _closed = true;
+        if (teardownError != null) {
+          throw teardownError;
         }
       }, allowClosing: true);
     } finally {
-      _closed = true;
-      _closing = false;
+      if (_closed) {
+        _closing = false;
+      } else {
+        // Active connection release failed before one-way teardown. Stay in
+        // closing state so ordinary work remains blocked, but permit close()
+        // itself to retry the same retained handle.
+        _closeFuture = null;
+      }
     }
   }
 }
