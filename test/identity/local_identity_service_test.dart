@@ -6,12 +6,22 @@ import 'package:filehop/identity/fake/fake_protected_identity_key_store.dart';
 import 'package:filehop/identity/generated_identity_material.dart';
 import 'package:filehop/identity/local_identity_load.dart';
 import 'package:filehop/identity/local_identity_service.dart';
+import 'package:filehop/identity/protected_key_reference.dart';
 import 'package:filehop/persistence/records/persistence_records.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/controllable_metadata_store.dart';
 import 'support/fingerprint_vector.dart';
 import 'support/test_key_material.dart';
+
+class _UnavailableAfterStore extends FakeProtectedIdentityKeyStore {
+  @override
+  Future<ProtectedKeyReference> store(Uint8List privateKeyBytes) async {
+    final ProtectedKeyReference reference = await super.store(privateKeyBytes);
+    unavailable = true;
+    return reference;
+  }
+}
 
 void main() {
   late ControllableLocalIdentityMetadataStore metadata;
@@ -114,6 +124,42 @@ void main() {
     expect(secrets.isEmpty, isFalse);
     expect(await service.loadLocalIdentity(), isA<IdentityUnavailable>());
   });
+
+  test(
+    'post-commit protected-store outage preserves recoverable identity',
+    () async {
+      final _UnavailableAfterStore transientSecrets = _UnavailableAfterStore();
+      final LocalIdentityService transientService = LocalIdentityService(
+        metadata: metadata,
+        secrets: transientSecrets,
+        nowUtcMs: () => 1_700_000_000_000,
+      );
+
+      await expectLater(
+        transientService.persistNewIdentity(testMaterialA()),
+        throwsA(
+          isA<IdentityException>().having(
+            (IdentityException error) => error.kind,
+            'kind',
+            IdentityFailureKind.identityStoreUnavailable,
+          ),
+        ),
+      );
+
+      expect(metadata.row, isNotNull);
+      expect(transientSecrets.secretCount, 1);
+      expect(transientSecrets.deleteCallCount, 0);
+
+      transientSecrets.unavailable = false;
+      final LocalIdentityLoad recovered = await transientService
+          .loadLocalIdentity();
+      expect(recovered, isA<IdentityAvailable>());
+      expect(
+        (recovered as IdentityAvailable).identity.fingerprint.value,
+        kVectorAFingerprint,
+      );
+    },
+  );
 
   test('metadata present and secret missing is identityKeyMissing', () async {
     final identity = await service.persistNewIdentity(testMaterialA());
