@@ -122,7 +122,13 @@ final class FileHopLanDiscovery {
   static let nativeServiceLocatorHint = "nativeService"
 
   private let emit: ([String: Any]) -> Void
+
+  /// Single serialized authority for all mutable discovery state. Public
+  /// method calls enter synchronously; native callbacks re-enter async and
+  /// validate their generation only after reaching this queue.
   private let queue = DispatchQueue(label: "app.filehop.lan.browse")
+  private let queueKey = DispatchSpecificKey<UInt8>()
+
   private var browser: NWBrowser?
   private var browserGeneration = 0
   private var browsing = false
@@ -153,6 +159,7 @@ final class FileHopLanDiscovery {
 
   init(emit: @escaping ([String: Any]) -> Void) {
     self.emit = emit
+    queue.setSpecific(key: queueKey, value: 1)
   }
 
   func availability() -> [String: Any] {
@@ -165,64 +172,76 @@ final class FileHopLanDiscovery {
   }
 
   func startBrowse() -> String? {
-    if browsing {
+    syncState {
+      if browsing {
+        return nil
+      }
+      generation += 1
+      let gen = generation
+      browsing = true
+      // D-07-09: TXT-record-aware descriptor. FileHop candidates require the
+      // v=1 / i=<instance> TXT metadata, so browsing without TXT would
+      // silently discover nothing valid.
+      let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(
+        type: Self.serviceType,
+        domain: nil
+      )
+      let params = NWParameters()
+      params.includePeerToPeer = false
+      let browser = NWBrowser(for: descriptor, using: params)
+      self.browser = browser
+      self.browserGeneration = gen
+      browser.stateUpdateHandler = { [weak self] state in
+        guard let self else { return }
+        self.queue.async {
+          // Stale state callbacks from an older or explicitly stopped browse
+          // have zero mutation and zero error emission.
+          guard self.live(gen), self.browserGeneration == gen else { return }
+          switch state {
+          case .failed(let error):
+            // Bounded mapping: NWError stays diagnostic text, never thrown.
+            self.emitError(
+              code: "discoveryStartFailed",
+              message: "NWBrowser failed: \(String(describing: error))",
+              gen: gen
+            )
+            self.browsing = false
+            self.cleanupBrowseGeneration(gen, emitLostForResolved: false)
+          case .ready, .setup, .cancelled, .waiting:
+            break
+          @unknown default:
+            break
+          }
+        }
+      }
+      browser.browseResultsChangedHandler = { [weak self] _, changes in
+        guard let self else { return }
+        self.queue.async {
+          self.handle(changes: changes, gen: gen)
+        }
+      }
+      browser.start(queue: queue)
       return nil
     }
-    generation += 1
-    let gen = generation
-    browsing = true
-    // D-07-09: TXT-record-aware descriptor. FileHop candidates require the
-    // v=1 / i=<instance> TXT metadata, so browsing without TXT would
-    // silently discover nothing valid.
-    let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(
-      type: Self.serviceType,
-      domain: nil
-    )
-    let params = NWParameters()
-    params.includePeerToPeer = false
-    let browser = NWBrowser(for: descriptor, using: params)
-    self.browser = browser
-    self.browserGeneration = gen
-    browser.stateUpdateHandler = { [weak self] state in
-      guard let self else { return }
-      switch state {
-      case .failed(let error):
-        // Bounded mapping: NWError stays diagnostic text, never thrown.
-        self.emitError(
-          code: "discoveryStartFailed",
-          message: "NWBrowser failed: \(String(describing: error))",
-          gen: gen
-        )
-        self.browsing = false
-        self.queue.async {
-          self.cleanupBrowseGeneration(gen, emitLostForResolved: false)
-        }
-      case .ready, .setup, .cancelled, .waiting:
-        break
-      @unknown default:
-        break
-      }
-    }
-    browser.browseResultsChangedHandler = { [weak self] _, changes in
-      guard let self else { return }
-      self.queue.async {
-        self.handle(changes: changes, gen: gen)
-      }
-    }
-    browser.start(queue: queue)
-    return nil
   }
 
   func stopBrowse() {
-    let gen = generation
-    browsing = false
-    queue.sync {
+    syncState {
+      let gen = generation
+      browsing = false
       cleanupBrowseGeneration(gen, emitLostForResolved: true)
     }
   }
 
   func detach() {
     stopBrowse()
+  }
+
+  private func syncState<T>(_ body: () -> T) -> T {
+    if DispatchQueue.getSpecific(key: queueKey) != nil {
+      return body()
+    }
+    return queue.sync(execute: body)
   }
 
   /// Central idempotent cleanup for browse generation `gen`.
@@ -233,7 +252,8 @@ final class FileHopLanDiscovery {
       active.cancel()
       browser = nil
     }
-    for (endpoint, item) in tracked where item.generation <= gen {
+    let stale = tracked.filter { _, item in item.generation <= gen }
+    for (endpoint, item) in stale {
       tracked.removeValue(forKey: endpoint)
       if let id = item.instanceId,
         removeOwner(path: endpoint, of: id),
