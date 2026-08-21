@@ -238,17 +238,31 @@ class LocalIdentityService {
       );
     }
 
+    // The metadata insert above is the commit point. After it succeeds, a
+    // transient read/Keychain/Keystore inspection failure must not delete the
+    // protected secret while leaving committed metadata behind. Preserve both
+    // resources and fail closed so a later load can recover naturally.
     final LocalIdentityLoad reloaded = await loadLocalIdentity();
     if (reloaded is IdentityAvailable) {
       return reloaded.identity;
     }
-    await _cleanupNewSecret(
-      reference,
-      IdentityFailureKind.identityStorageInconsistent,
-    );
-    throw const IdentityException(
-      kind: IdentityFailureKind.identityStorageInconsistent,
-      message: 'identity metadata did not reload after persist',
+    if (reloaded is IdentityAbsent) {
+      // Metadata genuinely vanished after the commit. No durable row owns the
+      // new secret, so cleaning up this attempt's secret is still safe.
+      await _cleanupNewSecret(
+        reference,
+        IdentityFailureKind.identityStorageInconsistent,
+      );
+      throw const IdentityException(
+        kind: IdentityFailureKind.identityStorageInconsistent,
+        message: 'identity metadata did not reload after persist',
+      );
+    }
+    final IdentityUnavailable unavailable = reloaded as IdentityUnavailable;
+    throw IdentityException(
+      kind: unavailable.kind,
+      message:
+          unavailable.message ?? 'persisted identity could not be verified',
     );
   }
 
