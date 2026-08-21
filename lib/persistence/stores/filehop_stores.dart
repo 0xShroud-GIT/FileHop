@@ -436,7 +436,10 @@ class FileHopStores {
         'item type',
       ),
       displayName: PersistCodec.requireString(row, 'display_name'),
-      relativePath: PersistCodec.optionalString(row, 'relative_path'),
+      relativePath: PersistedPathGuard.sanitizeRelative(
+        PersistCodec.optionalString(row, 'relative_path'),
+        kind: PersistenceFailureKind.decodeFailure,
+      ),
       sourceHandle: PersistCodec.optionalString(row, 'source_handle'),
       expectedLength: PersistCodec.requireInt(row, 'expected_length'),
       bytesVerified: PersistCodec.requireInt(row, 'bytes_verified'),
