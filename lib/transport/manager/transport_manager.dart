@@ -53,27 +53,31 @@ class TransportManager {
 
   SelectedTransportPath? _current;
   Future<void>? _busy;
+  Future<void>? _closeFuture;
   final List<String> operations = <String>[];
   final List<StreamSubscription<TransportAdapterEvent>> _subscriptions =
       <StreamSubscription<TransportAdapterEvent>>[];
+  bool _closing = false;
   bool _closed = false;
 
   TransportException? lastContractError;
 
   SelectedTransportPath? get currentPath => _current;
 
-  Future<void> registerAdapter(TransportAdapter adapter) async {
-    await capabilities.register(adapter);
-    final TransportKind sourceKind = adapter.kind;
-    _subscriptions.add(
-      adapter.events.listen(
-        (TransportAdapterEvent event) => _onAdapterEvent(sourceKind, event),
-      ),
-    );
+  Future<void> registerAdapter(TransportAdapter adapter) {
+    return _serialized<void>(() async {
+      await capabilities.register(adapter);
+      final TransportKind sourceKind = adapter.kind;
+      _subscriptions.add(
+        adapter.events.listen(
+          (TransportAdapterEvent event) => _onAdapterEvent(sourceKind, event),
+        ),
+      );
+    });
   }
 
   void _onAdapterEvent(TransportKind sourceKind, TransportAdapterEvent event) {
-    if (_closed) {
+    if (_closing || _closed) {
       return;
     }
     if (event.kind != sourceKind) {
@@ -130,6 +134,7 @@ class TransportManager {
   }
 
   TransportSelection reconcile(TransportAcquireRequest request) {
+    _throwIfNotOpen();
     return selector.select(_input(request, const <TransportCandidateKey>{}));
   }
 
@@ -161,9 +166,22 @@ class TransportManager {
     });
   }
 
-  Future<T> _serialized<T>(Future<T> Function() body) async {
+  Future<T> _serialized<T>(
+    Future<T> Function() body, {
+    bool allowClosing = false,
+  }) async {
+    if (!allowClosing) {
+      _throwIfNotOpen();
+    }
     while (_busy != null) {
-      await _busy;
+      final Future<void> pending = _busy!;
+      await pending;
+      if (!allowClosing) {
+        _throwIfNotOpen();
+      }
+    }
+    if (!allowClosing) {
+      _throwIfNotOpen();
     }
     final Completer<void> gate = Completer<void>();
     _busy = gate.future;
@@ -352,6 +370,15 @@ class TransportManager {
     }
   }
 
+  void _throwIfNotOpen() {
+    if (_closing || _closed) {
+      throw const TransportException(
+        kind: TransportFailureKind.invalidArgument,
+        message: 'transport manager is closing or closed',
+      );
+    }
+  }
+
   static TransportFailureKind _mapNone(TransportSelectionReason reason) {
     switch (reason) {
       case TransportSelectionReason.permissionBlocked:
@@ -368,16 +395,71 @@ class TransportManager {
     }
   }
 
-  Future<void> close() async {
-    if (_closed) {
-      return;
+  Future<void> close() {
+    return _closeFuture ??= _closeBody();
+  }
+
+  Future<void> _closeBody() async {
+    _closing = true;
+    try {
+      await _serialized<void>(() async {
+        TransportException? cleanupError;
+        final SelectedTransportPath? current = _current;
+        if (current != null) {
+          final TransportAdapter? adapter = capabilities.adapterFor(
+            current.kind,
+          );
+          if (adapter == null) {
+            cleanupError = const TransportException(
+              kind: TransportFailureKind.cleanupFailed,
+              message: 'active transport has no registered adapter at close',
+            );
+          } else {
+            try {
+              await adapter.disconnect(current.connection);
+            } on TransportException catch (error) {
+              cleanupError = TransportException(
+                kind: TransportFailureKind.cleanupFailed,
+                message: 'failed to disconnect active transport at close',
+                causeKind: error.kind,
+              );
+            } catch (_) {
+              cleanupError = const TransportException(
+                kind: TransportFailureKind.cleanupFailed,
+                message: 'failed to disconnect active transport at close',
+              );
+            }
+          }
+          _current = null;
+        }
+
+        for (final StreamSubscription<TransportAdapterEvent> sub
+            in _subscriptions) {
+          try {
+            await sub.cancel();
+          } catch (_) {
+            cleanupError ??= const TransportException(
+              kind: TransportFailureKind.cleanupFailed,
+              message: 'failed to cancel transport event subscription',
+            );
+          }
+        }
+        _subscriptions.clear();
+        try {
+          await capabilities.close();
+        } catch (_) {
+          cleanupError ??= const TransportException(
+            kind: TransportFailureKind.cleanupFailed,
+            message: 'failed to close transport capability registry',
+          );
+        }
+        if (cleanupError != null) {
+          throw cleanupError;
+        }
+      }, allowClosing: true);
+    } finally {
+      _closed = true;
+      _closing = false;
     }
-    _closed = true;
-    for (final StreamSubscription<TransportAdapterEvent> sub
-        in _subscriptions) {
-      await sub.cancel();
-    }
-    _subscriptions.clear();
-    await capabilities.close();
   }
 }
