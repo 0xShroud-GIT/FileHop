@@ -65,6 +65,54 @@ void main() {
     await lan.close();
   });
 
+  test('failed active disconnect keeps close retryable and blocks work', () async {
+    final FakeTransportAdapter lan = FakeTransportAdapter(
+      kind: TransportKind.lan,
+      availability: TransportAvailability.supportedAvailable,
+    )..failDisconnect = true;
+    final TransportManager manager = TransportManager();
+    await manager.registerAdapter(lan);
+    lan.emitCandidate(candidateId: 'l1');
+    await _flush();
+    await manager.acquire(
+      const TransportAcquireRequest(localPlatform: TransportPlatform.android),
+    );
+
+    await expectLater(
+      manager.close(),
+      throwsA(
+        isA<TransportException>().having(
+          (TransportException error) => error.kind,
+          'kind',
+          TransportFailureKind.cleanupFailed,
+        ),
+      ),
+    );
+    expect(lan.disconnectCallCount, 1);
+    expect(manager.currentPath, isNotNull);
+
+    await expectLater(
+      manager.acquire(
+        const TransportAcquireRequest(
+          localPlatform: TransportPlatform.android,
+        ),
+      ),
+      throwsA(
+        isA<TransportException>().having(
+          (TransportException error) => error.kind,
+          'kind',
+          TransportFailureKind.invalidArgument,
+        ),
+      ),
+    );
+
+    lan.failDisconnect = false;
+    await manager.close();
+    expect(lan.disconnectCallCount, 2);
+    expect(manager.currentPath, isNull);
+    await lan.close();
+  });
+
   test('new work is rejected after shutdown begins', () async {
     final FakeTransportAdapter lan = FakeTransportAdapter(
       kind: TransportKind.lan,
