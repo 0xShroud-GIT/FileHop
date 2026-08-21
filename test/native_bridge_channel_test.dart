@@ -177,6 +177,32 @@ void main() {
     expect(event.kind, NativeEventKind.adapterError);
     expect(event.error?.errorClass, NativeErrorClass.unavailable);
   });
+
+  test('bridge shares one EventChannel listen across Dart listeners', () async {
+    const EventChannel events = EventChannel(
+      'app.filehop.native.events.shared-test',
+    );
+    int nativeListenCount = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(
+          events,
+          MockStreamHandler.inline(
+            onListen: (Object? _, MockStreamHandlerEventSink sink) {
+              nativeListenCount += 1;
+            },
+          ),
+        );
+
+    final NativeBridge bridge = NativeBridge(events: events);
+    final subA = bridge.events().listen((NativeAdapterEvent _) {});
+    final subB = bridge.events().listen((NativeAdapterEvent _) {});
+    await Future<void>.delayed(Duration.zero);
+
+    expect(nativeListenCount, 1);
+
+    await subA.cancel();
+    await subB.cancel();
+  });
 }
 
 void testerHandler(
