@@ -100,6 +100,17 @@ class NativeCodec {
     return value;
   }
 
+  bool? optionalBool(Map<String, Object?> map, String key) {
+    final Object? value = map[key];
+    if (value == null) {
+      return null;
+    }
+    if (value is! bool) {
+      throw NativeCodecException('$key must be a bool or null');
+    }
+    return value;
+  }
+
   Map<String, Object?> envelope(Map<String, Object?> payload) {
     return <String, Object?>{'bridgeVersion': kNativeBridgeVersion, ...payload};
   }
@@ -298,6 +309,7 @@ class NativeCodec {
       final NativeConnectionHandle? connection = map['connection'] == null
           ? null
           : decodeConnection(map['connection']);
+      final bool? connected = optionalBool(map, 'connected');
       final NativeCapabilitySnapshot? capability = map['capability'] == null
           ? null
           : decodeCapability(map['capability']);
@@ -316,6 +328,7 @@ class NativeCodec {
         candidate: candidate,
         endpoint: endpoint,
         connection: connection,
+        connected: connected,
         capability: capability,
         permission: permission,
         lifecycle: lifecycle,
@@ -329,6 +342,7 @@ class NativeCodec {
         candidate: candidate,
         endpoint: endpoint,
         connection: connection,
+        connected: connected,
         capability: capability,
         permission: permission,
         lifecycle: lifecycle,
@@ -347,6 +361,7 @@ class NativeCodec {
     required NativeTransportCandidate? candidate,
     required NativeEndpoint? endpoint,
     required NativeConnectionHandle? connection,
+    required bool? connected,
     required NativeCapabilitySnapshot? capability,
     required NativePermissionStatus? permission,
     required NativeLifecycleEvent? lifecycle,
@@ -374,9 +389,9 @@ class NativeCodec {
           throw const NativeCodecException('candidateLost requires candidate');
         }
       case NativeEventKind.connectionChanged:
-        if (connection == null) {
+        if (connection == null || connected == null) {
           throw const NativeCodecException(
-            'connectionChanged requires connection',
+            'connectionChanged requires connection and connected',
           );
         }
       case NativeEventKind.endpointChanged:
@@ -517,6 +532,7 @@ class NativeCodec {
       'connection': event.connection == null
           ? null
           : encodeConnection(event.connection!),
+      'connected': event.connected,
       'capability': event.capability == null
           ? null
           : encodeCapability(event.capability!),
