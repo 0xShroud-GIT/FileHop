@@ -1,6 +1,8 @@
 package app.filehop.filehop
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -22,11 +24,21 @@ class FileHopNativePlugin(
     private val identityStore = FileHopIdentitySecretStore(context)
     private val lanDiscovery =
         FileHopLanDiscovery(context) { payload -> emitEvent(payload) }
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     companion object {
         const val BRIDGE_VERSION = 1
         const val COMMANDS = "app.filehop.native.commands"
         const val EVENTS = "app.filehop.native.events"
+
+        /**
+         * Engine detach is one-way, but NSD stop confirmation is asynchronous.
+         * Keep a bounded retry window so an onStopDiscoveryFailed callback can
+         * transition the discovery owner to UNCERTAIN and a later main-thread
+         * retry can request the authoritative stop again.
+         */
+        private const val DETACH_STOP_RETRY_COUNT = 12
+        private const val DETACH_STOP_RETRY_INTERVAL_MS = 500L
 
         fun registerWith(engine: FlutterEngine, context: Context): FileHopNativePlugin {
             val plugin = FileHopNativePlugin(context.applicationContext)
@@ -274,13 +286,22 @@ class FileHopNativePlugin(
     }
 
     private fun emitEvent(payload: Map<String, Any?>) {
-        val sink = eventSink ?: return
-        val main = android.os.Handler(android.os.Looper.getMainLooper())
-        main.post { sink.success(payload) }
+        mainHandler.post {
+            eventSink?.success(payload)
+        }
     }
 
     fun detach() {
+        // First stop is immediate. Follow-up calls are harmless while STOPPING
+        // or STOPPED and become meaningful only if NSD reports an asynchronous
+        // stop failure and FileHopLanDiscovery moves to UNCERTAIN.
         lanDiscovery.detach()
+        for (attempt in 1..DETACH_STOP_RETRY_COUNT) {
+            mainHandler.postDelayed(
+                { lanDiscovery.detach() },
+                attempt * DETACH_STOP_RETRY_INTERVAL_MS,
+            )
+        }
         eventSink = null
     }
 }
